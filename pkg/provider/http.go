@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -103,6 +104,21 @@ func (hc *HTTPClient) Do(req *http.Request) (*http.Response, error) {
 		hc.logHTTPRequest(req)
 		resp, err = hc.Client.Do(req)
 	}
+
+	if netError, ok := err.(*url.Error); ok {
+		if opErr, ok := netError.Err.(*net.OpError); ok {
+			switch e := opErr.Err.(type) {
+			case *net.AddrError:
+				logrus.Infof("ADDR Error: %+v\n", e)
+			case *net.DNSError:
+				dnsErr := errors.Errorf("Unable to resolve DNS host %s. Make sure you have proper network/proxy configuration", e.Name)
+				if e.IsNotFound {
+					return nil, dnsErr
+				}
+			}
+		}
+	}
+
 	if err != nil {
 		return resp, err
 	}
