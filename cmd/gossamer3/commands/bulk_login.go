@@ -87,8 +87,8 @@ func (input *PrimaryRoleInput) Assume(roleSessionName string, force bool) {
 		"Region": region,
 	}
 	if input.Role != nil {
-		fields["Role"] = input.Role.RoleARN
-		if logrus.GetLevel() >= logrus.DebugLevel {
+		fields["Role"] = input.RoleConfig.PrimaryRoleArn
+		if logrus.GetLevel() >= logrus.DebugLevel && input.Role != nil {
 			fields["SamlProvider"] = input.Role.PrincipalARN
 		}
 	}
@@ -226,8 +226,8 @@ func (input *SecondaryRoleInput) Assume(roleSessionName string, force bool) {
 		"Profile": input.RoleAssumption.Profile,
 		"Region":  region,
 	}
-	if logrus.GetLevel() >= logrus.DebugLevel && input.PrimaryInput.Role != nil {
-		fields["PrimaryRole"] = input.PrimaryInput.Role.RoleARN
+	if logrus.GetLevel() >= logrus.DebugLevel {
+		fields["PrimaryRole"] = input.PrimaryInput.RoleConfig.PrimaryRoleArn
 	}
 	l := logrus.WithFields(fields)
 
@@ -511,7 +511,10 @@ func bulkAssumeAsync(roles []cfg.RoleConfig, account *cfg.IDPAccount, roleConfig
 
 	// Assume each primary role
 	for _, role := range roles {
-		var primaryRole *g3.AWSRole // primaryRole is only used if useExistingCreds is false
+		// primaryRole is only used if useExistingCreds is false
+		primaryRole := &g3.AWSRole{
+			RoleARN: role.PrimaryRoleArn,
+		}
 		if !useExistingCreds {
 			primary, err := getPrimaryRole(samlAssertion, account, role.PrimaryRoleArn)
 			if err != nil {
