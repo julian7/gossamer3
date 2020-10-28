@@ -73,7 +73,7 @@ func (input *PrimaryRoleInput) Assume(roleSessionName string, force bool) {
 	// 2. AccountMap region
 	// 3. Default region from IDPAccount configuration
 	region := input.Account.Region
-	accountNumber := strings.Split(input.Role.RoleARN, ":")[4]
+	accountNumber := strings.Split(input.RoleConfig.PrimaryRoleArn, ":")[4]
 	if input.RoleConfig.Region != "" {
 		region = input.RoleConfig.Region
 	} else if r, ok := input.AccountRegionMap[accountNumber]; ok {
@@ -377,7 +377,7 @@ func BulkLogin(loginFlags *flags.LoginExecFlags) error {
 
 		// If no creds are expired, return to sender, no work to be done
 		if noCredsExpired {
-			logger.Infof("No credentials expired")
+			logger.Infof("Credentials are not expired (use --force to login anyways)")
 			return nil
 		}
 
@@ -658,6 +658,10 @@ func assumeRole(parentCreds *awsconfig.AWSCredentials, roleArn string, roleSessi
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create session")
 	}
+
+	// Set user agent handler
+	awsconfig.OverrideUserAgent(sess)
+
 	svc := sts.New(sess)
 
 	// Generate input
