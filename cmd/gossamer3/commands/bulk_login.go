@@ -88,7 +88,7 @@ func (input *PrimaryRoleInput) Assume(roleSessionName string, force bool) {
 	}
 	if input.Role != nil {
 		fields["Role"] = input.RoleConfig.PrimaryRoleArn
-		if logrus.GetLevel() >= logrus.DebugLevel && input.Role != nil {
+		if logrus.GetLevel() >= logrus.DebugLevel && input.Role != nil && input.Role.PrincipalARN != "" {
 			fields["SamlProvider"] = input.Role.PrincipalARN
 		}
 	}
