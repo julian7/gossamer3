@@ -4,7 +4,12 @@ import (
 	"bytes"
 	"context"
 	"io/ioutil"
+	"net/http"
+	"net/url"
 	"testing"
+
+	"github.com/GESkunkworks/gossamer3/pkg/cfg"
+	"github.com/GESkunkworks/gossamer3/pkg/provider"
 
 	"github.com/GESkunkworks/gossamer3/mocks"
 	"github.com/GESkunkworks/gossamer3/pkg/creds"
@@ -23,6 +28,8 @@ var docTests = []struct {
 	file     string
 	expected bool
 }{
+	{docIsPreLogin, "example/pre-login.html", true},
+	{docIsLogin, "example/pre-login.html", false},
 	{docIsLogin, "example/login.html", true},
 	{docIsLogin, "example/login2.html", true},
 	{docIsLogin, "example/otp.html", false},
@@ -34,6 +41,7 @@ var docTests = []struct {
 	{docIsOTP, "example/swipe.html", false},
 	{docIsOTP, "example/form-redirect.html", false},
 	{docIsOTP, "example/webauthn.html", false},
+	{docIsToken, "example/token.html", true},
 	{docIsSwipe, "example/login.html", false},
 	{docIsSwipe, "example/otp.html", false},
 	{docIsSwipe, "example/swipe.html", true},
@@ -49,6 +57,8 @@ var docTests = []struct {
 	{docIsWebAuthn, "example/swipe.html", false},
 	{docIsWebAuthn, "example/form-redirect.html", false},
 	{docIsWebAuthn, "example/webauthn.html", true},
+	{docIsSelectDevice, "example/devices.html", true},
+	{docIsChallenge, "example/challenge.html", true},
 	{docIsPingMessage, "example/password-expired.html", true},
 	{docIsPasswordExpiring, "example/password-expiring.html", true},
 }
@@ -65,6 +75,66 @@ func TestDocTypes(t *testing.T) {
 			t.Errorf("expect doc check of %v to be %v", tt.file, tt.expected)
 		}
 	}
+}
+
+func TestNew(t *testing.T) {
+	account := &cfg.IDPAccount{
+		Name:                 "default",
+		URL:                  "https://example.com",
+		Username:             "username",
+		Provider:             "Ping",
+		MFA:                  "Auto",
+		Timeout:              10,
+		AmazonWebservicesURN: "urn:amazon:webservices",
+		SessionDuration:      3600,
+		Profile:              "default",
+		Region:               "us-east-1",
+	}
+
+	client, err := New(account)
+	require.Nil(t, err)
+
+	require.Equal(t, account, client.idpAccount)
+	require.IsType(t, client.client, &provider.HTTPClient{})
+	require.NotNil(t, client.client)
+}
+
+func TestHandlePreLogin(t *testing.T) {
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	data, err := ioutil.ReadFile("example/pre-login.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	_, req, err := ac.handlePreLogin(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "subject=fdsa")
+}
+
+func TestHandlePreLoginNoContext(t *testing.T) {
+	ac := Client{}
+
+	data, err := ioutil.ReadFile("example/pre-login.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	_, _, err = ac.handlePreLogin(context.Background(), doc)
+	require.Error(t, err, "no context value for 'login'")
 }
 
 func TestHandleLogin(t *testing.T) {
@@ -91,6 +161,146 @@ func TestHandleLogin(t *testing.T) {
 	s := string(b[:])
 	require.Contains(t, s, "pf.username=fdsa")
 	require.Contains(t, s, "pf.pass=secret")
+}
+
+func TestHandleSelectDevice(t *testing.T) {
+	pr := &mocks.Prompter{}
+	prompter.SetPrompter(pr)
+	pr.Mock.On("Choose", "Select device", []string{"Phone", "Security Key"}).Return(1)
+
+	resp = &http.Response{
+		Request: &http.Request{
+			URL: &url.URL{
+				Scheme:  "https",
+				Host:    "example.com",
+				Path:    "/auth",
+				RawPath: "/auth",
+			},
+		},
+	}
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	data, err := ioutil.ReadFile("example/devices.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	_, req, err := ac.handleSelectDevice(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "deviceId=555")
+	require.Equal(t, resp.Request.URL.String(), req.URL.String())
+}
+
+func TestHandleSelectDevicePreSelected(t *testing.T) {
+	resp = &http.Response{
+		Request: &http.Request{
+			URL: &url.URL{
+				Scheme:  "https",
+				Host:    "example.com",
+				Path:    "/auth",
+				RawPath: "/auth",
+			},
+		},
+	}
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username:  "fdsa",
+		Password:  "secret",
+		URL:       "https://example.com/foo",
+		MFADevice: "Security Key",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	data, err := ioutil.ReadFile("example/devices.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	_, req, err := ac.handleSelectDevice(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "deviceId=555")
+	require.Equal(t, resp.Request.URL.String(), req.URL.String())
+}
+
+func TestHandleToken(t *testing.T) {
+	mfaAttempt = 0
+	pr := &mocks.Prompter{}
+	prompter.SetPrompter(pr)
+	pr.Mock.On("Password", "Enter Token Code (PIN + Token / Passcode for RSA)").Return("5309")
+
+	data, err := ioutil.ReadFile("example/token.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	_, req, err := ac.handleToken(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.pass=5309")
+}
+
+func TestHandleToken2(t *testing.T) {
+	mfaAttempt = 0
+	pr := &mocks.Prompter{}
+	prompter.SetPrompter(pr)
+	//pr.Mock.On("Password", "Enter Token Code (PIN + Token / Passcode for RSA)").Return("5309")
+
+	data, err := ioutil.ReadFile("example/token.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		MFAToken: "5309",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	_, req, err := ac.handleToken(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.pass=5309")
 }
 
 func TestHandleOTP(t *testing.T) {
@@ -122,34 +332,6 @@ func TestHandleOTP(t *testing.T) {
 
 	s := string(b[:])
 	require.Contains(t, s, "otp=5309")
-}
-
-func TestHandleToken(t *testing.T) {
-	mfaAttempt = 0
-
-	data, err := ioutil.ReadFile("example/token.html")
-	require.Nil(t, err)
-
-	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
-	require.Nil(t, err)
-
-	ac := Client{}
-	loginDetails := creds.LoginDetails{
-		Username: "fdsa",
-		Password: "secret",
-		MFAToken: "1337",
-		URL:      "https://example.com/foo",
-	}
-	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
-
-	_, req, err := ac.handleToken(ctx, doc)
-	require.Nil(t, err)
-
-	b, err := ioutil.ReadAll(req.Body)
-	require.Nil(t, err)
-
-	s := string(b[:])
-	require.Contains(t, s, "pf.pass=1337")
 }
 
 func TestHandleTokenWithStdin(t *testing.T) {
@@ -230,6 +412,35 @@ func TestHandleFormRedirect(t *testing.T) {
 	require.Contains(t, s, "idp_account_id=some-uuid")
 }
 
+func TestHandleChallenge(t *testing.T) {
+	pr := &mocks.Prompter{}
+	prompter.SetPrompter(pr)
+	pr.Mock.On("Password", "Enter Next Token Code (PIN + Token / Passcode for RSA)").Return("12345")
+
+	data, err := ioutil.ReadFile("example/challenge.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+	_, req, err := ac.handleChallenge(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.ok=clicked")
+	require.Contains(t, s, "pf.challengeResponse=12345")
+}
+
 func TestHandleWebAuthn(t *testing.T) {
 	data, err := ioutil.ReadFile("example/webauthn.html")
 	require.Nil(t, err)
@@ -246,6 +457,68 @@ func TestHandleWebAuthn(t *testing.T) {
 
 	s := string(b[:])
 	require.Contains(t, s, "isWebAuthnSupportedByBrowser=true")
+}
+
+func TestCheckForDevices(t *testing.T) {
+	req := checkForDevices()
+
+	resp = &http.Response{
+		Header: http.Header{
+			"Set-Cookie": []string{"test=value; Domain=example.com; Path=/; Secure; HttpOnly"},
+		},
+	}
+	require.Equal(t, "https://authenticator.pingone.com/pingid/ppm/devices", req.URL.String())
+	require.Equal(t, "GET", req.Method)
+
+	var cookie *http.Cookie = nil
+	for _, c := range resp.Cookies() {
+		if c.Name == "test" {
+			cookie = c
+			break
+		}
+	}
+	require.NotNil(t, cookie)
+	require.Equal(t, "test", cookie.Name)
+	require.Equal(t, "value", cookie.Value)
+}
+
+func TestAddCookies(t *testing.T) {
+	req, err := http.NewRequest("GET", "https://www.example.com", nil)
+	require.Nil(t, err)
+
+	cookies := []*http.Cookie{
+		{
+			Name:   "test1",
+			Value:  "val1",
+			Domain: "example.com",
+		},
+		{
+			Name:   "test2",
+			Value:  "val2",
+			Domain: "test.com",
+		},
+		{
+			Name:   "test3",
+			Value:  "val3",
+			Domain: "www.example.com",
+		},
+	}
+
+	addCookies(req, cookies)
+
+	require.Len(t, req.Cookies(), 2)
+
+	for _, c := range req.Cookies() {
+		if c.Name == "test2" && c.Value == "val2" {
+			require.Fail(t, "Request should not contain cookie test2")
+		}
+	}
+}
+
+func TestContains(t *testing.T) {
+	items := []string{"item1", "item2", "item3"}
+	require.True(t, contains(items, "item2"))
+	require.False(t, contains(items, "item5"))
 }
 
 func TestHandlePasswordExpired(t *testing.T) {
