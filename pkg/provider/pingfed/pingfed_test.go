@@ -57,9 +57,10 @@ var docTests = []struct {
 	{docIsWebAuthn, "example/swipe.html", false},
 	{docIsWebAuthn, "example/form-redirect.html", false},
 	{docIsWebAuthn, "example/webauthn.html", true},
-	{docIsPingMessage, "example/password-expired.html", true},
 	{docIsSelectDevice, "example/devices.html", true},
 	{docIsChallenge, "example/challenge.html", true},
+	{docIsPingMessage, "example/password-expired.html", true},
+	{docIsPasswordExpiring, "example/password-expiring.html", true},
 }
 
 func TestDocTypes(t *testing.T) {
@@ -303,6 +304,8 @@ func TestHandleToken2(t *testing.T) {
 }
 
 func TestHandleOTP(t *testing.T) {
+	mfaAttempt = 0
+
 	pr := &mocks.Prompter{}
 	prompter.SetPrompter(pr)
 	pr.Mock.On("Password", "Enter passcode").Return("5309")
@@ -331,7 +334,68 @@ func TestHandleOTP(t *testing.T) {
 	require.Contains(t, s, "otp=5309")
 }
 
+func TestHandleToken(t *testing.T) {
+	mfaAttempt = 0
+
+	data, err := ioutil.ReadFile("example/token.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		MFAToken: "1337",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	_, req, err := ac.handleToken(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.pass=1337")
+}
+
+func TestHandleTokenWithStdin(t *testing.T) {
+	mfaAttempt = 0
+
+	pr := &mocks.Prompter{}
+	prompter.SetPrompter(pr)
+	pr.Mock.On("Password", "Enter Token Code (PIN + Token / Passcode for RSA)").Return("1337")
+
+	data, err := ioutil.ReadFile("example/token.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	loginDetails := creds.LoginDetails{
+		Username: "fdsa",
+		Password: "secret",
+		URL:      "https://example.com/foo",
+	}
+	ctx := context.WithValue(context.Background(), ctxKey("login"), &loginDetails)
+
+	_, req, err := ac.handleToken(ctx, doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.pass=1337")
+}
+
 func TestHandleOTPWithArgument(t *testing.T) {
+	mfaAttempt = 0
+
 	data, err := ioutil.ReadFile("example/otp.html")
 	require.Nil(t, err)
 
@@ -495,4 +559,35 @@ func TestContains(t *testing.T) {
 	items := []string{"item1", "item2", "item3"}
 	require.True(t, contains(items, "item2"))
 	require.False(t, contains(items, "item5"))
+
+func TestHandlePasswordExpired(t *testing.T) {
+	data, err := ioutil.ReadFile("example/password-expired.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	_, _, err = ac.handlePingMessage(context.Background(), doc)
+	require.Error(t, err, "Your password is expired and must be changed.")
+}
+
+func TestHandlePasswordExpiring(t *testing.T) {
+	data, err := ioutil.ReadFile("example/password-expiring.html")
+	require.Nil(t, err)
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	require.Nil(t, err)
+
+	ac := Client{}
+	_, req, err := ac.handlePasswordExpiring(context.Background(), doc)
+	require.Nil(t, err)
+
+	b, err := ioutil.ReadAll(req.Body)
+	require.Nil(t, err)
+
+	s := string(b[:])
+	require.Contains(t, s, "pf.passwordExpiring=true")
+	require.Contains(t, s, "pf.notificationCancel=clicked")
+	require.Contains(t, s, "pf.pcvId=PDPCVOIDC")
 }

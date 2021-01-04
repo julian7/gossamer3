@@ -169,6 +169,9 @@ func (ac *Client) follow(ctx context.Context, req *http.Request) (string, error)
 	} else if docIsPingMessage(doc) {
 		logger.WithField("type", "ping-message").Debug("doc detect")
 		handler = ac.handlePingMessage
+	} else if docIsPasswordExpiring(doc) {
+		logger.WithField("type", "password-expiring").Debug("doc detect")
+		handler = ac.handlePasswordExpiring
 	} else if docIsError(doc) {
 		logger.WithField("type", "error").Debug("doc detect")
 		pingError := strings.TrimSpace(doc.Find("div.ping-error").Text())
@@ -264,7 +267,14 @@ func (ac *Client) handleToken(ctx context.Context, doc *goquery.Document) (conte
 		return ctx, nil, errors.Wrap(err, "error extracting login form")
 	}
 
-	token := prompter.Password("Enter Token Code (PIN + Token / Passcode for RSA)")
+	// Pull MFA token from command line if specified
+	token := loginDetails.MFAToken
+
+	// Request token
+	if loginDetails.MFAToken == "" || mfaAttempt > 0 {
+		token = prompter.Password("Enter Token Code (PIN + Token / Passcode for RSA)")
+	}
+	mfaAttempt++
 
 	// Make sure a token value was provided
 	if token == "" {
@@ -594,6 +604,28 @@ func (ac *Client) handlePingMessage(ctx context.Context, doc *goquery.Document) 
 	return ctx, nil, errors.New(pingError)
 }
 
+func (ac *Client) handlePasswordExpiring(ctx context.Context, doc *goquery.Document) (context.Context, *http.Request, error) {
+	// Extract the message
+	messages := doc.Find(".ping-messages>.ping-messages")
+	pingError := strings.TrimSpace(messages.Text())
+
+	// Print the error message
+	log.Println(pingError)
+
+	// Ignore the password change. The user needs to do this on their own.
+	form, err := page.NewFormFromDocument(doc, "form")
+	if err != nil {
+		return ctx, nil, errors.Wrap(err, "error extracting swipe status form")
+	}
+
+	form.Values.Set("pf.passwordExpiring", "true")
+	form.Values.Set("pf.notificationCancel", "clicked")
+	form.Values.Set("pf.pcvId", "PDPCVOIDC")
+	req, err := form.BuildRequest()
+
+	return ctx, req, err
+}
+
 func (ac *Client) handleFormRedirect(ctx context.Context, doc *goquery.Document) (context.Context, *http.Request, error) {
 	form, err := page.NewFormFromDocument(doc, "")
 	if err != nil {
@@ -628,6 +660,11 @@ func docIsLogin(doc *goquery.Document) bool {
 
 func docIsPingMessage(doc *goquery.Document) bool {
 	return doc.Has(".ping-messages>.ping-error").Size() > 0
+}
+
+func docIsPasswordExpiring(doc *goquery.Document) bool {
+	return doc.Has("input[name=\"pf.passwordExpiring\"]").Size() == 1 &&
+		doc.Has("input[name=\"pf.notificationCancel\"]").Size() == 1
 }
 
 func docIsToken(doc *goquery.Document) bool {
