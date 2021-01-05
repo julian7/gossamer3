@@ -580,7 +580,11 @@ func bulkAssumeAsync(sharedCredsFile *awsconfig.CredentialsFile, roles []cfg.Rol
 
 		// Timeout
 		case <-time.After(time.Second * time.Duration(account.Timeout)):
-			// TODO: Should i store what i have so far?
+			// Save credentials that were generated before timeout
+			if err := sharedCredsFile.SaveFile(); err != nil {
+				log.Fatalf("Error storing credentials before timeout : %v", err)
+			}
+
 			logger.Errorf("Timed out after %v seconds", account.Timeout)
 			return errors.New("timed out while assuming roles")
 		}
