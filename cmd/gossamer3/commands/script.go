@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"log"
 	"os"
 	"text/template"
 	"time"
@@ -48,25 +47,20 @@ func Script(execFlags *flags.LoginExecFlags, shell string) error {
 		return errors.Wrap(err, "error building login details")
 	}
 
-	sharedCreds := awsconfig.NewSharedCredentials(account.Profile)
-
-	// this checks if the credentials file has been created yet
-	// can only really be triggered if gossamer3 exec is run on a new
-	// system prior to creating $HOME/.aws
-	exist, err := sharedCreds.CredsExists()
+	// Load entire shared creds file off the bat
+	sharedCredsFile, err := awsconfig.LoadCredentialsFile()
 	if err != nil {
-		return errors.Wrap(err, "error loading credentials")
-	}
-	if !exist {
-		log.Println("unable to load credentials, login required to create them")
-		return nil
+		// If creds file does not exist, it will create one
+		return errors.Wrap(err, "error loading credentials file")
 	}
 
-	awsCreds, err := sharedCreds.Load()
+	// Load AWS Credentials from specific profile. Error is returned if creds dont exist
+	awsCreds, err := sharedCredsFile.Load(account.Profile)
 	if err != nil {
 		return errors.Wrap(err, "error loading credentials")
 	}
 
+	// Check if creds are expired
 	if time.Until(awsCreds.Expires) < 0 {
 		return errors.New("error aws credentials have expired")
 	}
