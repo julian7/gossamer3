@@ -97,7 +97,6 @@ func ExtractDestinationURL(data []byte) (string, error) {
 
 // ExtractAwsRoles given an assertion document extract the aws roles
 func ExtractAwsRoles(data []byte) ([]string, error) {
-
 	awsroles := []string{}
 
 	doc := etree.NewDocument()

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	g3 "github.com/GESkunkworks/gossamer3"
 	"github.com/GESkunkworks/gossamer3/helper/credentials"
@@ -29,38 +30,47 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		return errors.Wrap(err, "error building login details")
 	}
 
-	sharedCreds := awsconfig.NewSharedCredentials(account.Profile)
+	// Load entire shared creds file, if it does not exist, create it and load a blank
+	sharedCredsFile, err := awsconfig.LoadCredentialsFile()
+	if err != nil {
+		return errors.Wrap(err, "error loading credentials file")
+	}
 
 	logger.Debug("check if Creds Exist")
 
-	// this checks if the credentials file has been created yet
-	exist, err := sharedCreds.CredsExists()
-	if err != nil {
+	// Try to load profile and see if creds arent expired yet
+	awsCreds, err := sharedCredsFile.Load(account.Profile)
+	if err != nil && err != awsconfig.ErrCredentialsNotFound {
 		return errors.Wrap(err, "error loading credentials")
 	}
-	if !exist {
-		log.Println("unable to load credentials, login required to create them")
-		return nil
+
+	// Credentials with that profile already exists
+	if awsCreds != nil {
+		// Check if creds are expired
+		expired := time.Until(awsCreds.Expires) < 0
+
+		// Not expired, and not forcing login, no need to login
+		if !expired && !loginFlags.Force {
+			log.Println("Credentials are not expired (use --force to login anyways)")
+			return nil
+		}
 	}
 
-	if !sharedCreds.Expired() && !loginFlags.Force {
-		log.Println("Credentials are not expired (use --force to login anyways)")
-		return nil
-	}
-
+	// Get essential login details
 	loginDetails, err := resolveLoginDetails(account, loginFlags)
 	if err != nil {
 		log.Printf("%+v", err)
 		os.Exit(1)
 	}
 
-	err = loginDetails.Validate()
-	if err != nil {
+	// Validate login details (Make sure URL, Username, and password all exist)
+	if err := loginDetails.Validate(); err != nil {
 		return errors.Wrap(err, "error validating login details")
 	}
 
 	logger.WithField("idpAccount", account).Debug("building provider")
 
+	// Create a samlclient using Ping
 	provider, err := g3.NewSAMLClient(account)
 	if err != nil {
 		return errors.Wrap(err, "error building IdP client")
@@ -68,12 +78,13 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 
 	log.Printf("Authenticating as %s ...", loginDetails.Username)
 
+	// Auth using provider, get the saml assertion back
 	samlAssertion, err := provider.Authenticate(loginDetails)
 	if err != nil {
 		return errors.Wrap(err, "error authenticating to IdP")
-
 	}
 
+	// If saml assertion is blank, password is incorrect or configuration is incorrect
 	if samlAssertion == "" {
 		log.Println("Response did not contain a valid SAML assertion")
 		log.Println("Please check your username and password is correct")
@@ -81,6 +92,7 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		os.Exit(1)
 	}
 
+	// Keychain is not disabled, save creds to keychain
 	if !loginFlags.CommonFlags.DisableKeychain {
 		err = credentials.SaveCredentials(loginDetails.URL, loginDetails.Username, loginDetails.Password)
 		if err != nil {
@@ -88,6 +100,7 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		}
 	}
 
+	// Prompt user for a role after decoding saml assertion and verifying which roles you have access to based on your IDP Account
 	role, err := selectAwsRole(samlAssertion, account)
 	if err != nil {
 		return errors.Wrap(err, "Failed to assume role, please check whether you are permitted to assume the given role for the AWS service")
@@ -95,12 +108,13 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 
 	log.Println("Selected role:", role.RoleARN)
 
-	awsCreds, err := loginToStsUsingRole(role, account.SessionDuration, samlAssertion, account.Region)
+	// Assume role using IDP account
+	awsCreds, err = loginToStsUsingRole(role, account.SessionDuration, samlAssertion, account.Region)
 	if err != nil {
 		return errors.Wrap(err, "error logging into aws role using saml assertion")
 	}
 
-	// Assume a child role
+	// Check if a child role is to be assumed
 	if loginFlags.AssumeChildRole != "" {
 		samlAssertionData, err := b64.StdEncoding.DecodeString(samlAssertion)
 		if err != nil {
@@ -114,14 +128,14 @@ func Login(loginFlags *flags.LoginExecFlags) error {
 		}
 		roleSessionName = fmt.Sprintf("gossamer3-%s", roleSessionName)
 
-		// Assume child role
+		// Assume child role, overwrite parent creds
 		awsCreds, err = assumeRole(awsCreds, loginFlags.AssumeChildRole, roleSessionName, account.Region)
 		if err != nil {
 			return errors.Wrap(err, "error assuming child role")
 		}
 	}
 
-	return saveCredentials(awsCreds, sharedCreds)
+	return saveCredentials(account.Profile, awsCreds, sharedCredsFile)
 }
 
 func buildIdpAccount(loginFlags *flags.LoginExecFlags) (*cfg.IDPAccount, error) {
@@ -149,9 +163,6 @@ func buildIdpAccount(loginFlags *flags.LoginExecFlags) (*cfg.IDPAccount, error) 
 }
 
 func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFlags) (*creds.LoginDetails, error) {
-
-	// log.Printf("loginFlags %+v", loginFlags)
-
 	loginDetails := &creds.LoginDetails{
 		URL:       account.URL,
 		Username:  account.Username,
@@ -202,12 +213,14 @@ func resolveLoginDetails(account *cfg.IDPAccount, loginFlags *flags.LoginExecFla
 	return loginDetails, nil
 }
 
-func grabAllAwsRoles(samlAssertion []byte) ([]*g3.AWSRole, error) {
-	roles, err := g3.ExtractAwsRoles(samlAssertion)
+// Take a decoded saml assertion and extract roles from it
+func grabAllAwsRoles(decodedSamlAssertion []byte) ([]*g3.AWSRole, error) {
+	roles, err := g3.ExtractAwsRoles(decodedSamlAssertion)
 	if err != nil {
 		return nil, errors.Wrap(err, "error parsing aws roles")
 	}
 
+	// If no roles are found, exit with an error
 	if len(roles) == 0 {
 		log.Println("No roles to assume")
 		log.Println("Please check you are permitted to assume roles for the AWS service")
@@ -217,12 +230,15 @@ func grabAllAwsRoles(samlAssertion []byte) ([]*g3.AWSRole, error) {
 	return g3.ParseAWSRoles(roles)
 }
 
+// selectAwsRole takes a saml assertion and configuration and makes the user choose a single AWS role to assume into
 func selectAwsRole(samlAssertion string, account *cfg.IDPAccount) (*g3.AWSRole, error) {
+	// Decode saml assertion
 	data, err := b64.StdEncoding.DecodeString(samlAssertion)
 	if err != nil {
 		return nil, errors.Wrap(err, "error decoding saml assertion")
 	}
 
+	// Parse and verify AWS roles from decoded saml assertion
 	awsRoles, err := grabAllAwsRoles(data)
 	if err != nil {
 		return nil, err
@@ -234,6 +250,8 @@ func selectAwsRole(samlAssertion string, account *cfg.IDPAccount) (*g3.AWSRole, 
 func resolveRole(awsRoles []*g3.AWSRole, samlAssertion string, account *cfg.IDPAccount) (*g3.AWSRole, error) {
 	var role = new(g3.AWSRole)
 
+	// If there is only 1 role, use that one without asking
+	// If 0 roles (shouldnt happen), then return an error
 	if len(awsRoles) == 1 {
 		if account.RoleARN != "" {
 			return g3.LocateRole(awsRoles, account.RoleARN)
@@ -243,6 +261,7 @@ func resolveRole(awsRoles []*g3.AWSRole, samlAssertion string, account *cfg.IDPA
 		return nil, errors.New("no roles available")
 	}
 
+	// TODO: Remove second saml assertion
 	samlAssertionData, err := b64.StdEncoding.DecodeString(samlAssertion)
 	if err != nil {
 		return nil, errors.Wrap(err, "error decoding saml assertion")
@@ -314,17 +333,26 @@ func loginToStsUsingRole(role *g3.AWSRole, sessionDuration int, samlAssertion, r
 	}, nil
 }
 
-func saveCredentials(awsCreds *awsconfig.AWSCredentials, sharedCreds *awsconfig.CredentialsProvider) error {
-	err := sharedCreds.Save(awsCreds)
-	if err != nil {
-		return errors.Wrap(err, "error saving credentials")
+func saveCredentials(profile string, awsCreds *awsconfig.AWSCredentials, sharedCredsFile *awsconfig.CredentialsFile) error {
+	// Store creds to credentials file in memory
+	if err := sharedCredsFile.StoreCreds(profile, awsCreds); err != nil {
+		return errors.Wrap(err, "error adding profile to credentials")
 	}
+
+	logrus.Debugln("stored credentials to memory")
+
+	// Save credentials file from memory to storage
+	if err := sharedCredsFile.SaveFile(); err != nil {
+		return errors.Wrap(err, "error storing credentials file")
+	}
+
+	logrus.Debugln("stored credentials to disk")
 
 	log.Println("Logged in as:", awsCreds.PrincipalARN)
 	log.Println("")
 	log.Println("Your new access key pair has been stored in the AWS configuration")
 	log.Printf("Note that it will expire at %v", awsCreds.Expires)
-	log.Println("To use this credential, call the AWS CLI with the --profile option (e.g. aws --profile", sharedCreds.Profile, "ec2 describe-instances).")
+	log.Println("To use this credential, call the AWS CLI with the --profile option (e.g. aws --profile", profile, "ec2 describe-instances).")
 
 	return nil
 }

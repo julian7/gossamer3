@@ -108,6 +108,7 @@ func (ac *Client) follow(ctx context.Context, req *http.Request) (string, error)
 
 	var handler func(context.Context, *goquery.Document) (context.Context, *http.Request, error)
 
+	// If response is a form redirect to AWS, return the saml response that is redirected back to AWS
 	if docIsFormRedirectToAWS(doc) {
 		logger.WithField("type", "saml-response-to-aws").Debug("doc detect")
 		if samlResponse, ok := extractSAMLResponse(doc); ok {

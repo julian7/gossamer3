@@ -15,7 +15,6 @@ type ProviderList map[string][]string
 // MFAsByProvider a list of providers with their respective supported MFAs
 var MFAsByProvider = ProviderList{
 	"Ping": []string{"Auto", "None"}, // automatically detects PingID
-	//"PingOne": []string{"Auto"},         // automatically detects PingID
 }
 
 // Names get a list of provider names
@@ -66,11 +65,6 @@ func NewSAMLClient(idpAccount *cfg.IDPAccount) (SAMLClient, error) {
 			return nil, fmt.Errorf("Invalid MFA type: %v for %v provider", idpAccount.MFA, idpAccount.Provider)
 		}
 		return pingfed.New(idpAccount)
-	//case "PingOne":
-	//	if invalidMFA(idpAccount.Provider, idpAccount.MFA) {
-	//		return nil, fmt.Errorf("Invalid MFA type: %v for %v provider", idpAccount.MFA, idpAccount.Provider)
-	//	}
-	//	return pingone.New(idpAccount)
 	default:
 		return nil, fmt.Errorf("Invalid provider: %v", idpAccount.Provider)
 	}
