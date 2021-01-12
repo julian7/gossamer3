@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr"><head>
+    <title>Security Question</title>
+    <base href="https://example.com"/>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <meta name="viewport" content="initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+    <meta http-equiv="x-ua-compatible" content="IE=edge"/>
+</head>
+<body onload="setFocus()">
+
+<div class="ping-container" style="padding-top:0px;padding-bottom:0px;min-height:0;">
+
+    <!--
+     if there is a logo present in the 'company-logo' container,
+     then 'has-logo' class should be added to 'ping-header' container.
+     -->
+    <div class="ping-header" style="padding-top:50px;">
+        <img src="pingid_logo.png" width="40" height="40" style="vertical-align:text-bottom;"/>
+        Security Question
+    </div>
+
+    <div class="ping-body-container" style="margin-bottom:0px">
+        <div class="section-title">
+            Wait for token to change,
+            then enter the new tokencode:
+        </div>
+        <div>
+            <form method="POST" action="/continue-login" autocomplete="off">
+
+
+                <div class="ping-input-container">
+                    <input id="challengeResponse" type="password" name="pf.challengeResponse" onkeypress="return postOnReturn(event)"/>
+                </div>
+
+                <div class="ping-buttons">
+                    <input type="hidden" name="pf.ok" value=""/>
+                    <input type="hidden" name="pf.cancel" value=""/>
+
+
+                    <a onclick="postOk();" class="ping-button normal allow" title="Submit">
+                        Submit
+                    </a>
+                    <a onclick="postCancel();" class="ping-button blue deny" title="Cancel">
+                        Cancel
+                    </a>
+
+                </div><!-- .ping-buttons -->
+            </form>
+        </div><!-- .ping-body -->
+    </div><!-- .ping-body-container -->
+</div><!-- .ping-container -->
+
+
+
+</body></html>

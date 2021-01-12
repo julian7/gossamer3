@@ -227,6 +227,7 @@ func (ac *Client) handleLogin(ctx context.Context, doc *goquery.Document) (conte
 		return ctx, nil, errors.New(pingErrors.Text())
 	}
 
+	loginAttempt++
 	if loginAttempt > 1 {
 		// Password was not accepted. Re-prompt for login details
 		log.Println("Invalid username or password")
@@ -241,7 +242,6 @@ func (ac *Client) handleLogin(ctx context.Context, doc *goquery.Document) (conte
 			}
 		}
 	}
-	loginAttempt++
 
 	form, err := page.NewFormFromDocument(doc, "form")
 	if err != nil {
