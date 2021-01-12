@@ -36,7 +36,7 @@ jobs:
         run: |
           version=${GITHUB_REF#refs/*/}
           stripped_version=${version#v}
-          echo ::set-env name=VERSION::${stripped_version}
+          echo "VERSION=${stripped_version}" >> $GITHUB_ENV
       - name: Checkout code
         uses: actions/checkout@v2
       - name: Set up Go 1.x
