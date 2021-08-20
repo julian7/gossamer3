@@ -24,9 +24,35 @@ import (
 
 const (
 	commercialFederationURL = "https://signin.aws.amazon.com/federation"
+	commercialDestination   = "https://console.aws.amazon.com/"
 	govFederationURL        = "https://signin.amazonaws-us-gov.com/federation"
+	govRegionPrefix         = "us-gov-"
+	govDestination          = "https://console.amazonaws-us-gov.com/"
+	awsChinaFederationURL   = "https://signin.amazonaws.cn/federation"
+	awsChinaPrefix          = "cn-"
+	awsChinaDestination     = "https://console.amazonaws.cn/"
 	issuer                  = "gossamer3"
 )
+
+func federationUrlFromRegion(region string) string {
+	if strings.HasPrefix(region, govRegionPrefix) {
+		return govFederationURL
+	} else if strings.HasPrefix(region, awsChinaPrefix) {
+		return awsChinaFederationURL
+	}
+
+	return commercialFederationURL
+}
+
+func destinationFromRegion(region string) string {
+	if strings.HasPrefix(region, govRegionPrefix) {
+		return govDestination
+	} else if strings.HasPrefix(region, awsChinaPrefix) {
+		return awsChinaDestination
+	}
+
+	return commercialDestination
+}
 
 // Console open the aws console from the CLI
 func Console(consoleFlags *flags.ConsoleFlags) error {
@@ -80,10 +106,7 @@ func Console(consoleFlags *flags.ConsoleFlags) error {
 		}
 	}
 
-	federationURL := commercialFederationURL
-	if strings.HasPrefix(account.Region, "us-gov-") {
-		federationURL = govFederationURL
-	}
+	federationURL := federationUrlFromRegion(account.Region)
 
 	log.Printf("Presenting credentials for %s to %s", account.Profile, federationURL)
 	return federatedLogin(awsCreds, consoleFlags)
@@ -144,10 +167,7 @@ func federatedLogin(creds *awsconfig.AWSCredentials, consoleFlags *flags.Console
 		return err
 	}
 
-	federationURL := commercialFederationURL
-	if strings.HasPrefix(creds.Region, "us-gov-") {
-		federationURL = govFederationURL
-	}
+	federationURL := federationUrlFromRegion(creds.Region)
 
 	req, err := http.NewRequest("GET", federationURL, nil)
 	if err != nil {
@@ -184,10 +204,7 @@ func federatedLogin(creds *awsconfig.AWSCredentials, consoleFlags *flags.Console
 		return err
 	}
 
-	destination := "https://console.aws.amazon.com/"
-	if strings.HasPrefix(creds.Region, "us-gov-") {
-		destination = "https://console.amazonaws-us-gov.com/"
-	}
+	destination := destinationFromRegion(creds.Region)
 
 	loginURL := fmt.Sprintf(
 		"%s?Action=login&Issuer=%s&Destination=%s&SigninToken=%s",

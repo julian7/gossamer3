@@ -726,6 +726,7 @@ func docIsFormResume(doc *goquery.Document) bool {
 
 func docIsFormRedirectToAWS(doc *goquery.Document) bool {
 	return doc.Find("form[action=\"https://signin.aws.amazon.com/saml\"]").Size() == 1 ||
+		doc.Find("form[action=\"https://signin.amazonaws.cn/saml\"]").Size() == 1 ||
 		doc.Find("form[action=\"https://signin.amazonaws-us-gov.com/saml\"]").Size() == 1
 }
 
